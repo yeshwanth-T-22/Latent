@@ -141,3 +141,49 @@ export async function transcribeAudio(audioBlob: Blob): Promise<TranscribeRespon
   }
   return res.json();
 }
+
+// ── Dashboard ────────────────────────────────────────────────────────────────
+
+export interface DashboardResponse {
+  profile: { display_name: string; year_group: string; created_at: string } | null;
+  streak: number;
+  maxStreak: number;
+  recentActivity: { id: string; type: string; topicName: string; createdAt: string; score: number | null }[];
+}
+
+export async function fetchDashboardData(): Promise<DashboardResponse> {
+  const authHeaders = await getAuthHeader();
+  const res = await fetch('/api/dashboard', { headers: authHeaders });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── Profile ──────────────────────────────────────────────────────────────────
+
+export interface ProfileStats {
+  totalSessions: number;
+  totalDoubt: number;
+  totalQuiz: number;
+  totalExplain: number;
+  avgScore: number | null;
+  topicsCount: number;
+  weakSpotsCount: number;
+  memberSince: string;
+}
+
+export interface ProfileData {
+  profile: { id: string; display_name: string; year_group: string | null; avatar_color: string; bio: string | null; created_at: string } | null;
+  email: string | undefined;
+  stats: ProfileStats;
+}
+
+export async function fetchProfile(): Promise<ProfileData> {
+  return apiFetch<ProfileData>('/api/profile');
+}
+
+export async function updateProfile(updates: { display_name?: string; year_group?: string; avatar_color?: string; bio?: string }): Promise<{ success: boolean }> {
+  return apiFetch<{ success: boolean }>('/api/profile', {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+}

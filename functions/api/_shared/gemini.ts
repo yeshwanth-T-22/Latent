@@ -6,12 +6,22 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 
 function getModel(apiKey: string) {
   const genAI = new GoogleGenerativeAI(apiKey);
-  return genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+  return genAI.getGenerativeModel({ model: 'gemini-3.6-flash' });
 }
 
 function safeParseJSON<T>(text: string): T | null {
   const cleaned = text.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
   try { return JSON.parse(cleaned) as T; } catch { return null; }
+}
+
+async function generateWithTimeout(model: any, prompt: string, timeoutMs: number = 25000) {
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('Generation timed out. Please try again.')), timeoutMs);
+  });
+  return Promise.race([
+    model.generateContent(prompt),
+    timeoutPromise
+  ]);
 }
 
 // ── 1. Doubt Solver ──────────────────────────────────────────────────────────
@@ -42,7 +52,7 @@ Respond in a warm, encouraging, Socratic tone.
 - Be concise (3–5 sentences), then optionally offer a follow-up prompt.
 - Plain conversational text only — no markdown headers.`;
 
-  const result = await model.generateContent(prompt);
+  const result = await generateWithTimeout(model, prompt);
   return result.response.text().trim();
 }
 
@@ -73,7 +83,7 @@ Return ONLY valid JSON (no markdown):
 
 "correct" is the 0-based index of the correct option. Test conceptual understanding, not rote recall.`;
 
-  const result = await model.generateContent(prompt);
+  const result = await generateWithTimeout(model, prompt);
   const parsed = safeParseJSON<{ questions: QuizQuestion[] }>(result.response.text());
   if (!parsed?.questions) throw new Error('Gemini returned an invalid quiz format.');
   return parsed;
@@ -121,7 +131,7 @@ Evaluate reasoning quality (not just answer correctness). Return ONLY valid JSON
 
 isWeakSpot = true if self-confidence ≥ 4 AND trueScore < 60, OR reasoning reveals misconceptions.`;
 
-  const result = await model.generateContent(prompt);
+  const result = await generateWithTimeout(model, prompt);
   const parsed = safeParseJSON<EvaluationResult>(result.response.text());
   if (!parsed || typeof parsed.trueScore !== 'number') throw new Error('Gemini returned an invalid evaluation format.');
   return parsed;
@@ -157,7 +167,7 @@ Return ONLY valid JSON:
 
 trueScore is 0–100. Be specific — name actual concepts.`;
 
-  const result = await model.generateContent(prompt);
+  const result = await generateWithTimeout(model, prompt);
   const parsed = safeParseJSON<ExplainBackResult>(result.response.text());
   if (!parsed || typeof parsed.trueScore !== 'number') throw new Error('Gemini returned an invalid explain-back format.');
   return parsed;
@@ -180,7 +190,7 @@ Each step = one short, actionable task sentence.
 Return ONLY valid JSON:
 { "steps": ["Step 1", "Step 2", "Step 3"] }`;
 
-  const result = await model.generateContent(prompt);
+  const result = await generateWithTimeout(model, prompt);
   const parsed = safeParseJSON<{ steps: string[] }>(result.response.text());
   if (!parsed?.steps) return ['Review your notes', 'Explain it to a friend', 'Test yourself with 3 questions'];
   return parsed.steps;
@@ -209,6 +219,6 @@ Weak spots: ${weakSpots.join(', ') || 'none'}
 2–3 sentences: what they're doing well, one area to watch, encouraging close.
 Plain text only — no bullets, no markdown.`;
 
-  const result = await model.generateContent(prompt);
+  const result = await generateWithTimeout(model, prompt);
   return result.response.text().trim();
 }

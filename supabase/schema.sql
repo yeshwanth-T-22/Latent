@@ -10,9 +10,15 @@ create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   display_name text not null default 'Student',
   year_group text,
+  avatar_color text not null default '#4ba59a',
+  bio text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Migration: add avatar_color and bio if table already exists
+alter table public.profiles add column if not exists avatar_color text not null default '#4ba59a';
+alter table public.profiles add column if not exists bio text;
 
 -- ─── topics table ─────────────────────────────────────────────────────────────
 -- One row per (student, topic_name) pair.

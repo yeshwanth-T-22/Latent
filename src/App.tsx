@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUpRight,
   BarChart3,
@@ -9,6 +9,7 @@ import {
   CircleHelp,
   Clock3,
   Compass,
+  Edit3,
   Headphones,
   Home,
   Lightbulb,
@@ -20,10 +21,13 @@ import {
   MoreHorizontal,
   PenLine,
   Plus,
+  RefreshCw,
   Send,
+  Settings,
   Sun,
   Target,
   TrendingUp,
+  User,
   X,
   Zap,
 } from 'lucide-react';
@@ -41,12 +45,17 @@ import {
   fetchReport,
   fetchMentor,
   transcribeAudio,
+  fetchDashboardData,
+  fetchProfile,
+  updateProfile,
+  type DashboardResponse,
+  type ProfileData,
 } from './api';
 import type { QuizQuestion, ReportTopic, MentorResponse, ExplainBackResponse } from './types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type Page = 'home' | 'doubt' | 'confidence' | 'explain' | 'report' | 'mentor';
+type Page = 'home' | 'doubt' | 'confidence' | 'explain' | 'report' | 'mentor' | 'profile';
 type Theme = 'light' | 'dark';
 
 type Topic = {
@@ -69,7 +78,23 @@ const navItems: { id: Page; label: string; icon: typeof Home }[] = [
 const TOPIC_COLORS = ['#e0926e', '#4ba59a', '#8b7eb5', '#e0b86e', '#6e9ee0', '#a5604b'];
 function topicColor(index: number) { return TOPIC_COLORS[index % TOPIC_COLORS.length]; }
 
-const DEFAULT_TOPIC = 'Quadratic equations';
+// DEFAULT_TOPIC removed — topics are now user-entered
+
+function getInitials(name: string) {
+  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || 'ST';
+}
+
+function formatRelativeTime(dateStr: string) {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+}
 
 // ── Shared hooks ─────────────────────────────────────────────────────────────
 
@@ -226,9 +251,11 @@ function Logo() {
   );
 }
 
-function Sidebar({ page, setPage, open, setOpen, onSignOut }: {
-  page: Page; setPage: (page: Page) => void; open: boolean; setOpen: (open: boolean) => void; onSignOut: () => void;
+function Sidebar({ page, setPage, open, setOpen, onSignOut, session }: {
+  page: Page; setPage: (page: Page, ctx?: string) => void; open: boolean; setOpen: (open: boolean) => void; onSignOut: () => void; session: Session;
 }) {
+  const displayName = session.user.user_metadata?.display_name || 'Student';
+  const initials = getInitials(displayName);
   return (
     <>
       {open && <button className="mobile-scrim" onClick={() => setOpen(false)} aria-label="Close menu" />}
@@ -251,11 +278,14 @@ function Sidebar({ page, setPage, open, setOpen, onSignOut }: {
           <button className={`nav-item ${page === 'mentor' ? 'active' : ''}`} onClick={() => { setPage('mentor'); setOpen(false); }}>
             <Compass size={18} /><span>Mentor view</span>
           </button>
+          <button className={`nav-item ${page === 'profile' ? 'active' : ''}`} onClick={() => { setPage('profile'); setOpen(false); }}>
+            <Settings size={18} /><span>Profile &amp; Settings</span>
+          </button>
           <div className="sidebar-divider" />
-          <div className="profile-row">
-            <div className="avatar small">AK</div>
-            <div><strong>Alex Kim</strong><span>Year 11 · Student</span></div>
-            <button onClick={onSignOut} title="Sign out" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
+          <div className="profile-row" style={{ cursor: 'pointer' }} onClick={() => { setPage('profile'); setOpen(false); }}>
+            <div className="avatar small" style={{ background: 'var(--accent)' }}>{initials}</div>
+            <div><strong>{displayName}</strong><span>{session.user.email}</span></div>
+            <button onClick={(e) => { e.stopPropagation(); onSignOut(); }} title="Sign out" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
               <LogOut size={16} />
             </button>
           </div>
@@ -265,9 +295,11 @@ function Sidebar({ page, setPage, open, setOpen, onSignOut }: {
   );
 }
 
-function Topbar({ onMenu, eyebrow, title, action, theme, toggleTheme }: {
-  onMenu: () => void; eyebrow: string; title: string; action?: React.ReactNode; theme: Theme; toggleTheme: () => void;
+function Topbar({ onMenu, eyebrow, title, action, theme, toggleTheme, session, onProfileClick }: {
+  onMenu: () => void; eyebrow: string; title: string; action?: React.ReactNode; theme: Theme; toggleTheme: () => void; session: Session; onProfileClick: () => void;
 }) {
+  const displayName = session.user.user_metadata?.display_name || 'Student';
+  const initials = getInitials(displayName);
   return (
     <header className="topbar">
       <button className="menu-button" onClick={onMenu} aria-label="Open menu"><Menu size={21} /></button>
@@ -281,7 +313,7 @@ function Topbar({ onMenu, eyebrow, title, action, theme, toggleTheme }: {
           {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
         </button>
         <button className="notification-button"><span /></button>
-        <div className="avatar">AK</div>
+        <div className="avatar" onClick={onProfileClick} style={{ cursor: 'pointer', background: 'var(--accent)' }} title={displayName}>{initials}</div>
       </div>
     </header>
   );
@@ -343,7 +375,7 @@ function Activity({ icon: Icon, title, subtitle, time, color }: {
 
 // ── Pages ─────────────────────────────────────────────────────────────────────
 
-function HomePage({ setPage, session }: { setPage: (p: Page) => void; session: Session }) {
+function HomePage({ setPage, session, dashboard }: { setPage: (p: Page, ctx?: string) => void; session: Session; dashboard: DashboardResponse | null }) {
   const [topics, setTopics] = useState<Topic[]>([]);
   const [weakSpotsCount, setWeakSpotsCount] = useState(0);
   const [topicsCount, setTopicsCount] = useState(0);
@@ -394,7 +426,7 @@ function HomePage({ setPage, session }: { setPage: (p: Page) => void; session: S
       <div className="stats-grid">
         <StatCard icon={BookOpen} label="Topics studied" value={loading ? '…' : String(topicsCount)} detail="+3 this week" tone="peach" />
         <StatCard icon={Brain} label="Current weak spots" value={loading ? '…' : String(weakSpotsCount)} detail="A little attention needed" tone="mint" progress={weakSpotsCount > 0 ? Math.min(100, weakSpotsCount * 15) : 0} />
-        <StatCard icon={Zap} label="Study streak" value="7 days" detail="Best: 14 days" tone="lavender" />
+        <StatCard icon={Zap} label="Study streak" value={`${dashboard?.streak || 0} days`} detail={`Best: ${dashboard?.maxStreak || 0} days`} tone="lavender" />
       </div>
       <section className="section-block">
         <div className="section-heading">
@@ -417,7 +449,7 @@ function HomePage({ setPage, session }: { setPage: (p: Page) => void; session: S
                 <div className="focus-line"><span>Understanding</span><i style={{ width: `${focusTopic.understanding}%` }} /><b>{focusTopic.understanding}%</b></div>
               </div>
             )}
-            <button className="light-button" onClick={() => setPage('explain')}>Work on this topic <ChevronRight size={16} /></button>
+            <button className="light-button" disabled={!focusTopic} onClick={() => setPage('explain', focusTopic?.name)}>Work on this topic <ChevronRight size={16} /></button>
           </div>
           <div className="activity-card">
             <div className="card-heading">
@@ -425,9 +457,9 @@ function HomePage({ setPage, session }: { setPage: (p: Page) => void; session: S
               <button className="ghost-icon"><MoreHorizontal size={18} /></button>
             </div>
             <div className="activity-list">
-              <Activity icon={PenLine} title="Explained back" subtitle="Cellular respiration" time="Yesterday" color="mint" />
-              <Activity icon={Target} title="Confidence check" subtitle="The French Revolution" time="Mon" color="lavender" />
-              <Activity icon={CircleHelp} title="Asked a doubt" subtitle="Quadratic equations" time="Sun" color="peach" />
+              {dashboard?.recentActivity?.length ? dashboard.recentActivity.map(act => (
+                <Activity key={act.id} icon={act.type === 'doubt' ? CircleHelp : act.type === 'quiz' ? Target : PenLine} title={act.type === 'doubt' ? 'Asked a doubt' : act.type === 'quiz' ? 'Confidence check' : 'Explained back'} subtitle={act.topicName} time={new Date(act.createdAt).toLocaleDateString()} color={act.type === 'doubt' ? 'peach' : act.type === 'quiz' ? 'lavender' : 'mint'} />
+              )) : <p className="lede" style={{fontSize:'0.875rem'}}>No recent activity</p>}
             </div>
             <button className="text-button small">See all activity <ChevronRight size={15} /></button>
           </div>
@@ -442,7 +474,20 @@ function HomePage({ setPage, session }: { setPage: (p: Page) => void; session: S
           {loading
             ? <p className="lede">Loading your topics…</p>
             : topics.length === 0
-              ? <p className="lede">No topics yet — start a study session!</p>
+              ? (
+                <div className="onboarding-banner" style={{ gridColumn: '1 / -1', background: 'var(--surface)', padding: '2rem', borderRadius: '16px', border: '1px dashed var(--border)', textAlign: 'center' }}>
+                  <div className="icon-circle" style={{ background: 'var(--accent-2)', color: 'var(--accent)', margin: '0 auto 1rem', width: '48px', height: '48px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Brain size={24} />
+                  </div>
+                  <h3>Welcome to Latent!</h3>
+                  <p className="lede" style={{ marginBottom: '1.5rem', maxWidth: '400px', margin: '0 auto 1.5rem' }}>Start your first study session to see your landscape grow. You can pick any topic you're currently learning.</p>
+                  <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                    {['Algebra', 'Photosynthesis', 'World War II'].map(s => (
+                      <button key={s} className="light-button" onClick={() => setPage('doubt', s)}>{s}</button>
+                    ))}
+                  </div>
+                </div>
+              )
               : topics.map(topic => <TopicCard key={topic.name} topic={topic} compact />)
           }
         </div>
@@ -451,14 +496,20 @@ function HomePage({ setPage, session }: { setPage: (p: Page) => void; session: S
   );
 }
 
-function DoubtPage() {
-  const [topic] = useState(DEFAULT_TOPIC);
+function DoubtPage({ initialTopic, session }: { initialTopic?: string; session: Session }) {
+  const [topic, setTopic] = useState(initialTopic || '');
+  const initials = getInitials(session.user.user_metadata?.display_name || 'Student');
   const [messages, setMessages] = useState([
-    { role: 'ai', text: 'Hey! What are you working through today?', time: '10:42 AM' },
+    { role: 'ai', text: 'Hey! What topic are you working through today? Type it above and then ask your question.', time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) },
   ]);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
+  }, [messages, loading]);
 
   const addMessage = (role: 'ai' | 'user', text: string) => {
     const time = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -468,6 +519,7 @@ function DoubtPage() {
   const send = async (text?: string) => {
     const question = (text ?? draft).trim();
     if (!question || loading) return;
+    if (!topic.trim()) { setError('Please enter a topic first.'); return; }
     setDraft('');
     setError(null);
     addMessage('user', question);
@@ -492,18 +544,24 @@ function DoubtPage() {
     <div className="page-content full-height-page">
       <div className="chat-layout">
         <div className="chat-main">
-          <div className="context-pill">
-            <BookOpen size={14} /> Learning session <span>•</span> {topic} <ChevronRight size={14} />
+          <div className="context-pill" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <BookOpen size={14} /> Learning session <span>•</span> 
+            <input 
+              value={topic} 
+              onChange={e => setTopic(e.target.value)} 
+              placeholder="Type your topic here (e.g. Photosynthesis)..."
+              style={{ background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', color: 'inherit', fontWeight: 600, outline: 'none', flex: 1, minWidth: 0 }} 
+            />
           </div>
-          <div className="message-thread">
+          <div className="message-thread" ref={threadRef}>
             {messages.map((message, index) => (
               <div className={`message-row ${message.role}`} key={`${message.time}-${index}`}>
                 <div className={`message-avatar ${message.role}`}>
-                  {message.role === 'ai' ? <img src="/assets/icons/Latent_Reveal_Icon copy.png" alt="Latent" /> : 'AK'}
+                  {message.role === 'ai' ? <img src="/assets/icons/Latent_Reveal_Icon copy.png" alt="Latent" /> : initials}
                 </div>
                 <div className="message-content">
-                  <div className="message-name">{message.role === 'ai' ? 'Latent' : 'You'} <span>{message.time}</span></div>
-                  <div className="message-bubble">{message.text}</div>
+                  <div className="message-name">{message.role === 'ai' ? 'Latent' : (session.user.user_metadata?.display_name || 'You')} <span>{message.time}</span></div>
+                  <div className="message-bubble" style={{ whiteSpace: 'pre-wrap' }}>{message.text}</div>
                   {message.role === 'ai' && index === messages.length - 1 && !loading && (
                     <div className="message-actions">
                       <button><Lightbulb size={14} /> See an example</button>
@@ -518,7 +576,7 @@ function DoubtPage() {
                 <div className="message-avatar ai"><img src="/assets/icons/Latent_Reveal_Icon copy.png" alt="Latent" /></div>
                 <div className="message-content">
                   <div className="message-name">Latent <span>…</span></div>
-                  <div className="message-bubble" style={{ opacity: 0.5 }}>Thinking…</div>
+                  <div className="message-bubble typing-indicator"><span/><span/><span/></div>
                 </div>
               </div>
             )}
@@ -534,7 +592,7 @@ function DoubtPage() {
                 value={draft}
                 onChange={e => setDraft(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-                placeholder="Ask anything about your topic..."
+                placeholder={topic ? `Ask anything about ${topic}...` : 'Enter a topic above first...'}
                 rows={1}
                 disabled={loading}
               />
@@ -545,7 +603,7 @@ function DoubtPage() {
               >
                 <Mic size={19} />
               </button>
-              <button className="send-button" onClick={() => send()} disabled={loading || !draft.trim()}>
+              <button className="send-button" onClick={() => send()} disabled={loading || !draft.trim() || !topic.trim()}>
                 <Send size={17} />
               </button>
             </div>
@@ -553,30 +611,31 @@ function DoubtPage() {
           </div>
         </div>
         <aside className="chat-aside">
-          <div className="aside-kicker">SESSION NOTES</div>
-          <h3>{topic}</h3>
-          <p>Keep these ideas close while you work through the topic.</p>
+          <div className="aside-kicker">SESSION INFO</div>
+          <h3>{topic || 'No topic yet'}</h3>
+          <p>Type your topic above and ask any question — Latent will guide you through it.</p>
           <div className="note-block">
-            <span className="note-number">01</span>
-            <strong>Complete the square</strong>
-            <p>Rewrite an expression so one side becomes a perfect square.</p>
+            <span className="note-number"><Lightbulb size={13} /></span>
+            <strong>Tip: Be specific</strong>
+            <p>"How does photosynthesis work in low light?" gets better answers than just "photosynthesis".</p>
           </div>
           <div className="note-block">
-            <span className="note-number">02</span>
-            <strong>Look for the pattern</strong>
-            <p>Every quadratic can be reshaped into this same form.</p>
+            <span className="note-number"><Brain size={13} /></span>
+            <strong>Think out loud</strong>
+            <p>Share what you already know — Latent builds on your existing understanding.</p>
           </div>
-          <button className="light-button">Save a note <Plus size={16} /></button>
         </aside>
       </div>
     </div>
   );
 }
 
-function ConfidencePage() {
-  const topic = DEFAULT_TOPIC;
+function ConfidencePage({ initialTopic }: { initialTopic?: string }) {
+  const [topicInput, setTopicInput] = useState(initialTopic || '');
+  const [confirmedTopic, setConfirmedTopic] = useState(initialTopic || '');
+  const [quizStarted, setQuizStarted] = useState(!!initialTopic);
   const [quiz, setQuiz] = useState<{ questions: QuizQuestion[] } | null>(null);
-  const [quizLoading, setQuizLoading] = useState(true);
+  const [quizLoading, setQuizLoading] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
   const [currentQ, setCurrentQ] = useState(0);
   const [answers, setAnswers] = useState<{ questionText: string; chosenOption: string; correct: boolean }[]>([]);
@@ -587,16 +646,21 @@ function ConfidencePage() {
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<{ trueScore: number; isWeakSpot: boolean; feedback: string; gotRight: string[]; toStrengthen: string[] } | null>(null);
 
-  const loadQuiz = () => {
+  const startQuiz = useCallback((topic: string) => {
+    setConfirmedTopic(topic);
+    setQuizStarted(true);
     setQuizLoading(true);
     setQuizError(null);
+    setQuiz(null);
     fetchQuiz(topic)
       .then(data => setQuiz(data))
-      .catch(e => setQuizError(e instanceof Error ? e.message : 'Failed to load quiz.'))
+      .catch(e => setQuizError(e instanceof Error ? e.message : 'Failed to load quiz. Please try again.'))
       .finally(() => setQuizLoading(false));
-  };
+  }, []);
 
-  useEffect(() => { loadQuiz(); }, []);
+  useEffect(() => {
+    if (initialTopic && !quiz && !quizLoading) startQuiz(initialTopic);
+  }, [initialTopic]);
 
   const handleSubmit = async () => {
     if (selectedOption === null || confidence === null || !quiz) return;
@@ -613,7 +677,7 @@ function ConfidencePage() {
 
     setSubmitting(true);
     try {
-      const evaluation = await submitConfidenceCheck(topic, updatedAnswers, confidence, reasoning);
+      const evaluation = await submitConfidenceCheck(confirmedTopic, updatedAnswers, confidence, reasoning);
       setResult(evaluation);
       setSubmitted(true);
     } catch (e: unknown) {
@@ -624,36 +688,67 @@ function ConfidencePage() {
   };
 
   const resetQuiz = () => {
-    setSubmitted(false);
-    setResult(null);
-    setAnswers([]);
-    setCurrentQ(0);
-    setSelectedOption(null);
-    setConfidence(null);
-    setReasoning('');
-    loadQuiz();
+    setSubmitted(false); setResult(null); setAnswers([]); setCurrentQ(0);
+    setSelectedOption(null); setConfidence(null); setReasoning('');
+    setQuizStarted(false); setQuiz(null); setTopicInput(confirmedTopic);
   };
 
   const totalQ = quiz?.questions.length ?? 2;
-  const progress = submitted ? 100 : ((currentQ + (selectedOption !== null ? 0.5 : 0)) / totalQ) * 100;
+  const progress = submitted ? 100 : quizStarted ? ((currentQ + (selectedOption !== null ? 0.5 : 0)) / totalQ) * 100 : 0;
 
   return (
     <div className="page-content">
       <div className="quiz-wrap">
         <div className="quiz-progress">
           <span>CONFIDENCE CHECK</span>
-          <span>{submitted ? 'Complete' : `${currentQ + 1} of ${totalQ} questions`}</span>
+          <span>{submitted ? 'Complete' : quizStarted && quiz ? `${currentQ + 1} of ${totalQ} questions` : 'Choose a topic'}</span>
         </div>
         <div className="quiz-bar"><i style={{ width: `${progress}%` }} /></div>
 
-        {quizLoading && <p className="lede" style={{ marginTop: '2rem' }}>Generating your quiz…</p>}
-        {quizError && <p className="lede" style={{ marginTop: '2rem', color: 'var(--text-muted)' }}>{quizError}</p>}
+        {/* Topic Picker — shown when no quiz started */}
+        {!quizStarted && (
+          <div style={{ marginTop: '2rem' }}>
+            <div className="eyebrow" style={{ marginBottom: '0.5rem' }}>WHAT DO YOU WANT TO TEST?</div>
+            <h2 style={{ marginBottom: '1rem' }}>Choose your topic</h2>
+            <p className="lede" style={{ marginBottom: '1.5rem' }}>Latent will generate a personalised 2-question quiz to check how well you really understand it.</p>
+            <input
+              type="text"
+              value={topicInput}
+              onChange={e => setTopicInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && topicInput.trim()) startQuiz(topicInput.trim()); }}
+              placeholder="e.g. The French Revolution, Photosynthesis, Algebra..."
+              style={{ width: '100%', padding: '0.875rem 1rem', borderRadius: '12px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: '1rem', marginBottom: '1rem', outline: 'none' }}
+              autoFocus
+            />
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
+              {['Quadratic equations', 'Photosynthesis', 'The French Revolution', 'Newton\'s Laws', 'DNA replication'].map(s => (
+                <button key={s} className="light-button" style={{ fontSize: '0.8125rem', padding: '0.375rem 0.875rem' }} onClick={() => { setTopicInput(s); startQuiz(s); }}>{s}</button>
+              ))}
+            </div>
+            <button className="primary-button wide" disabled={!topicInput.trim()} onClick={() => startQuiz(topicInput.trim())}>
+              Start quiz <ArrowUpRight size={16} />
+            </button>
+          </div>
+        )}
 
-        {!quizLoading && !quizError && quiz && !submitted && (
+        {quizLoading && (
+          <div style={{ marginTop: '2rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <RefreshCw size={18} style={{ animation: 'spin 1s linear infinite' }} />
+            <p className="lede">Generating your quiz on "{confirmedTopic}"…</p>
+          </div>
+        )}
+        {quizError && (
+          <div style={{ marginTop: '2rem' }}>
+            <p className="lede" style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{quizError}</p>
+            <button className="light-button" onClick={() => startQuiz(confirmedTopic)}><RefreshCw size={15} /> Try again</button>
+          </div>
+        )}
+
+        {!quizLoading && !quizError && quiz && quizStarted && !submitted && (
           <>
             <div className="quiz-topic">
               <span className="topic-dot" style={{ background: '#e0926e', color: '#e0926e' }} />
-              Mathematics <span>•</span> {topic}
+              {confirmedTopic}
             </div>
             <h2>{quiz.questions[currentQ].text}</h2>
             <div className="answer-options">
@@ -722,9 +817,14 @@ function ConfidencePage() {
                 </div>
               </div>
             )}
-            <button className="primary-button" onClick={resetQuiz}>
-              Try another question <ChevronRight size={16} />
-            </button>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '1rem' }}>
+              <button className="primary-button" onClick={resetQuiz}>
+                Try another topic <RefreshCw size={16} />
+              </button>
+              <button className="light-button" onClick={() => startQuiz(confirmedTopic)}>
+                Retry same topic <ChevronRight size={16} />
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -739,9 +839,9 @@ function ConfidencePage() {
   );
 }
 
-function ExplainPage() {
+function ExplainPage({ initialTopic }: { initialTopic?: string }) {
   const [text, setText] = useState('');
-  const [topic] = useState('Cellular respiration');
+  const [topic, setTopic] = useState(initialTopic || 'General');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<ExplainBackResponse | null>(null);
@@ -775,7 +875,12 @@ function ExplainPage() {
           <label className="field-label">What do you want to explain?</label>
           <div className="topic-select">
             <span className="topic-dot" style={{ background: '#4ba59a', color: '#4ba59a' }} />
-            {topic}
+            <input 
+              value={topic} 
+              onChange={e => setTopic(e.target.value)} 
+              placeholder="Topic..."
+              style={{ background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', color: 'inherit', fontWeight: 600, outline: 'none', flex: 1, fontSize: 'inherit' }} 
+            />
             <ChevronRight size={17} />
           </div>
           <label className="field-label">Your explanation</label>
@@ -848,6 +953,7 @@ function ExplainPage() {
 function ReportPage() {
   const [topics, setTopics] = useState<Topic[]>([]);
   const [weekLabel, setWeekLabel] = useState('');
+  const [timeFilter, setTimeFilter] = useState<'7d' | '30d' | 'all'>('7d');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -874,11 +980,15 @@ function ReportPage() {
     <div className="page-content">
       <div className="report-intro">
         <div>
-          <div className="eyebrow">WEEK OF {weekLabel || '…'}</div>
+          <div className="eyebrow">{timeFilter === '7d' ? `WEEK OF ${weekLabel || '…'}` : timeFilter === '30d' ? 'LAST 30 DAYS' : 'ALL TIME'}</div>
           <h2>Your weekly weak-spot report.</h2>
           <p className="lede">A gentle nudge toward the topics that could use a little more time.</p>
         </div>
-        <button className="light-button"><Clock3 size={16} /> Last 7 days <ChevronRight size={15} /></button>
+        <div style={{ display: 'flex', gap: '0.5rem', background: 'var(--surface)', padding: '0.25rem', borderRadius: '24px', border: '1px solid var(--border)' }}>
+          <button className={`nav-item ${timeFilter === '7d' ? 'active' : ''}`} style={{ padding: '0.25rem 1rem', fontSize: '0.875rem' }} onClick={() => setTimeFilter('7d')}>7 days</button>
+          <button className={`nav-item ${timeFilter === '30d' ? 'active' : ''}`} style={{ padding: '0.25rem 1rem', fontSize: '0.875rem' }} onClick={() => setTimeFilter('30d')}>30 days</button>
+          <button className={`nav-item ${timeFilter === 'all' ? 'active' : ''}`} style={{ padding: '0.25rem 1rem', fontSize: '0.875rem' }} onClick={() => setTimeFilter('all')}>All time</button>
+        </div>
       </div>
       <div className="report-banner">
         <div className="banner-icon"><TrendingUp size={21} /></div>
@@ -924,7 +1034,7 @@ function MentorPage() {
           <p className="lede">A clear, encouraging snapshot of progress over time.</p>
         </div>
         <div className="mentor-badge">
-          <div className="avatar small">AK</div>
+          <div className="avatar small" style={{ background: 'var(--accent)' }}>{data?.displayName ? getInitials(data.displayName) : 'ST'}</div>
           <span>{data?.displayName || 'Student'}</span>
         </div>
       </div>
@@ -991,14 +1101,129 @@ function MentorPage() {
   );
 }
 
+// ── Profile Page ─────────────────────────────────────────────────────────────
+
+function ProfilePage({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
+  const [profile, setProfile] = useState<ProfileData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [displayName, setDisplayName] = useState('');
+  const [yearGroup, setYearGroup] = useState('');
+
+  useEffect(() => {
+    fetchProfile()
+      .then(data => {
+        setProfile(data);
+        setDisplayName(data.profile?.display_name || '');
+        setYearGroup(data.profile?.year_group || '');
+      })
+      .catch(e => setError(e instanceof Error ? e.message : 'Could not load profile.'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await updateProfile({ display_name: displayName, year_group: yearGroup });
+      // Reload profile
+      const data = await fetchProfile();
+      setProfile(data);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Could not save profile.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <div className="page-content"><p className="lede">Loading profile…</p></div>;
+  if (error) return <div className="page-content"><p className="lede" style={{ color: 'var(--text-muted)' }}>{error}</p></div>;
+  if (!profile) return null;
+
+  return (
+    <div className="page-content">
+      <div className="report-intro">
+        <div>
+          <div className="eyebrow">ACCOUNT SETTINGS</div>
+          <h2>Your Profile.</h2>
+          <p className="lede">Manage your details and view your all-time stats.</p>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', alignItems: 'start' }}>
+        <section className="section-block" style={{ marginTop: 0 }}>
+          <h3 style={{ marginBottom: '1.5rem', fontSize: '1.125rem' }}>Personal Details</h3>
+          <div style={{ background: 'var(--surface)', padding: '2rem', borderRadius: '16px', border: '1px solid var(--border)' }}>
+            <label className="field-label">Display Name</label>
+            <input
+              type="text"
+              value={displayName}
+              onChange={e => setDisplayName(e.target.value)}
+              style={{ width: '100%', padding: '0.875rem 1rem', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: '1rem', marginBottom: '1.5rem', outline: 'none' }}
+            />
+            
+            <label className="field-label">Year Group</label>
+            <input
+              type="text"
+              value={yearGroup}
+              onChange={e => setYearGroup(e.target.value)}
+              placeholder="e.g. Year 11, Grade 10"
+              style={{ width: '100%', padding: '0.875rem 1rem', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: '1rem', marginBottom: '1.5rem', outline: 'none' }}
+            />
+
+            <label className="field-label">Email Address (Read-only)</label>
+            <input
+              type="text"
+              value={profile.email}
+              disabled
+              style={{ width: '100%', padding: '0.875rem 1rem', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text-muted)', fontSize: '1rem', marginBottom: '2rem', outline: 'none', opacity: 0.7 }}
+            />
+
+            <button className="primary-button" onClick={handleSave} disabled={saving}>
+              {saving ? 'Saving…' : 'Save Changes'} <Check size={16} />
+            </button>
+          </div>
+        </section>
+
+        <section className="section-block" style={{ marginTop: 0 }}>
+          <h3 style={{ marginBottom: '1.5rem', fontSize: '1.125rem' }}>All-Time Stats</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <StatCard icon={BookOpen} label="Total Sessions" value={String(profile.stats.totalSessions)} detail="Since joining" tone="peach" />
+            <StatCard icon={Brain} label="Topics Tracked" value={String(profile.stats.topicsCount)} detail={`${profile.stats.weakSpotsCount} weak spots`} tone="mint" />
+            <StatCard icon={Target} label="Average Score" value={profile.stats.avgScore ? `${profile.stats.avgScore}%` : '–'} detail="Across all quizzes" tone="lavender" />
+            <StatCard icon={User} label="Member Since" value={new Date(profile.stats.memberSince).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })} detail="Keep it up!" tone="peach" />
+          </div>
+
+          <h3 style={{ marginTop: '2.5rem', marginBottom: '1.5rem', fontSize: '1.125rem', color: 'var(--text-muted)' }}>Danger Zone</h3>
+          <div style={{ background: 'var(--surface)', padding: '1.5rem', borderRadius: '16px', border: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <strong>Sign out</strong>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.25rem' }}>Sign out of this device.</p>
+            </div>
+            <button className="light-button" onClick={onSignOut}><LogOut size={16} /> Sign out</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 // ── App shell ────────────────────────────────────────────────────────────────
 
 function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [page, setPage] = useState<Page>('home');
+  const [activeTopic, setActiveTopic] = useState('');
+  const [dashboardData, setDashboardData] = useState<DashboardResponse | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const { theme, toggle } = useTheme();
+
+  const handleSetPage = (p: Page, ctx?: string) => {
+    if (ctx) setActiveTopic(ctx);
+    setPage(p);
+  };
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -1013,9 +1238,16 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (session) {
+      fetchDashboardData().then(setDashboardData).catch(console.error);
+    }
+  }, [session, page]);
+
   const handleSignOut = async () => {
     await signOut();
     setSession(null);
+    setDashboardData(null);
     setPage('home');
   };
 
@@ -1026,6 +1258,7 @@ function App() {
     explain: ['EXPLAIN-BACK', 'Make it make sense'],
     report: ['WEEKLY REPORT', 'A clearer picture'],
     mentor: ['MENTOR VIEW', 'Progress, in context'],
+    profile: ['ACCOUNT', 'Your Profile'],
   }[page]), [page]);
 
   if (authLoading) {
@@ -1042,22 +1275,25 @@ function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar page={page} setPage={setPage} open={menuOpen} setOpen={setMenuOpen} onSignOut={handleSignOut} />
+      <Sidebar page={page} setPage={handleSetPage} open={menuOpen} setOpen={setMenuOpen} onSignOut={handleSignOut} session={session} />
       <main className="main-area">
         <Topbar
           onMenu={() => setMenuOpen(true)}
           eyebrow={pageMeta[0]}
           title={pageMeta[1]}
-          action={page === 'home' ? <span className="topbar-streak"><Zap size={15} /> 7 day streak</span> : undefined}
+          action={page === 'home' ? <span className="topbar-streak"><Zap size={15} /> {dashboardData?.streak || 0} day streak</span> : undefined}
           theme={theme}
           toggleTheme={toggle}
+          session={session}
+          onProfileClick={() => handleSetPage('profile')}
         />
-        {page === 'home' && <HomePage setPage={setPage} session={session} />}
-        {page === 'doubt' && <DoubtPage />}
-        {page === 'confidence' && <ConfidencePage />}
-        {page === 'explain' && <ExplainPage />}
+        {page === 'home' && <HomePage setPage={handleSetPage} session={session} dashboard={dashboardData} />}
+        {page === 'doubt' && <DoubtPage initialTopic={activeTopic} session={session} />}
+        {page === 'confidence' && <ConfidencePage initialTopic={activeTopic} />}
+        {page === 'explain' && <ExplainPage initialTopic={activeTopic} />}
         {page === 'report' && <ReportPage />}
         {page === 'mentor' && <MentorPage />}
+        {page === 'profile' && <ProfilePage session={session} onSignOut={handleSignOut} />}
       </main>
     </div>
   );
