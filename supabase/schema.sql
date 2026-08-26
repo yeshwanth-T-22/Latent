@@ -30,11 +30,19 @@ create table if not exists public.topics (
   confidence_score integer not null default 50 check (confidence_score between 0 and 100),
   true_understanding_score integer not null default 50 check (true_understanding_score between 0 and 100),
   is_weak_spot boolean not null default false,
+  doubt_state jsonb,
+  quiz_state jsonb,
+  explain_state jsonb,
   last_interaction timestamptz not null default now(),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique(student_id, topic_name)
 );
+
+-- Migration: add state columns if table already exists
+alter table public.topics add column if not exists doubt_state jsonb;
+alter table public.topics add column if not exists quiz_state jsonb;
+alter table public.topics add column if not exists explain_state jsonb;
 
 -- ─── history table ────────────────────────────────────────────────────────────
 -- One row per interaction (doubt, quiz, explainback).

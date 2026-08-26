@@ -499,26 +499,57 @@ function HomePage({ setPage, session, dashboard }: { setPage: (p: Page, ctx?: st
 function DoubtPage({ initialTopic, session }: { initialTopic?: string; session: Session }) {
   const [topic, setTopic] = useState(initialTopic || '');
   const initials = getInitials(session.user.user_metadata?.display_name || 'Student');
-  const [messages, setMessages] = useState([
+  const [messages, setMessages] = useState<any[]>([
     { role: 'ai', text: 'Hey! What topic are you working through today? Type it above and then ask your question.', time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) },
   ]);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(false);
+  const [topicLoading, setTopicLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!topic.trim()) return;
+    const timeout = setTimeout(() => {
+      setTopicLoading(true);
+      fetchTopicState(topic.trim())
+        .then(data => {
+          if (data.doubt_state && Array.isArray(data.doubt_state) && data.doubt_state.length > 0) {
+            setMessages(data.doubt_state);
+          } else {
+            setMessages([{ role: 'ai', text: `Hey! What do you want to know about ${topic.trim()}? Ask your question.`, time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) }]);
+          }
+        })
+        .finally(() => setTopicLoading(false));
+    }, 600);
+    return () => clearTimeout(timeout);
+  }, [topic]);
+
+  useEffect(() => {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
-  }, [messages, loading]);
+  }, [messages, loading, topicLoading]);
+
+  const updateMessages = (newMsgs: any[]) => {
+    setMessages(newMsgs);
+    if (topic.trim()) {
+      updateTopicState(topic.trim(), 'doubt', newMsgs).catch(console.error);
+    }
+  };
 
   const addMessage = (role: 'ai' | 'user', text: string) => {
     const time = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    setMessages(prev => [...prev, { role, text, time }]);
+    setMessages(prev => {
+      const newMsgs = [...prev, { role, text, time }];
+      if (topic.trim()) {
+        updateTopicState(topic.trim(), 'doubt', newMsgs).catch(console.error);
+      }
+      return newMsgs;
+    });
   };
 
   const send = async (text?: string) => {
     const question = (text ?? draft).trim();
-    if (!question || loading) return;
+    if (!question || loading || topicLoading) return;
     if (!topic.trim()) { setError('Please enter a topic first.'); return; }
     setDraft('');
     setError(null);
@@ -580,6 +611,11 @@ function DoubtPage({ initialTopic, session }: { initialTopic?: string; session: 
                 </div>
               </div>
             )}
+            {topicLoading && !loading && (
+              <div style={{ textAlign: 'center', padding: '1rem', color: 'var(--text-muted)' }}>
+                <RefreshCw size={18} style={{ animation: 'spin 1s linear infinite' }} />
+              </div>
+            )}
           </div>
           {(error || voiceError) && (
             <div className="message-bubble" style={{ margin: '0 1rem 0.5rem', color: 'var(--text-muted)' }}>
@@ -633,7 +669,7 @@ function DoubtPage({ initialTopic, session }: { initialTopic?: string; session: 
 function ConfidencePage({ initialTopic }: { initialTopic?: string }) {
   const [topicInput, setTopicInput] = useState(initialTopic || '');
   const [confirmedTopic, setConfirmedTopic] = useState(initialTopic || '');
-  const [quizStarted, setQuizStarted] = useState(!!initialTopic);
+  const [quizStarted, setQuizStarted] = useState(false);
   const [quiz, setQuiz] = useState<{ questions: QuizQuestion[] } | null>(null);
   const [quizLoading, setQuizLoading] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
@@ -652,15 +688,42 @@ function ConfidencePage({ initialTopic }: { initialTopic?: string }) {
     setQuizLoading(true);
     setQuizError(null);
     setQuiz(null);
+    setAnswers([]);
+    setCurrentQ(0);
+    setSubmitted(false);
+    setResult(null);
+    
+    updateTopicState(topic, 'quiz', { quizStarted: true, quiz: null, currentQ: 0, answers: [], submitted: false, result: null }).catch(console.error);
+
     fetchQuiz(topic)
-      .then(data => setQuiz(data))
+      .then(data => {
+        setQuiz(data);
+        updateTopicState(topic, 'quiz', { quizStarted: true, quiz: data, currentQ: 0, answers: [], submitted: false, result: null }).catch(console.error);
+      })
       .catch(e => setQuizError(e instanceof Error ? e.message : 'Failed to load quiz. Please try again.'))
       .finally(() => setQuizLoading(false));
   }, []);
 
   useEffect(() => {
-    if (initialTopic && !quiz && !quizLoading) startQuiz(initialTopic);
-  }, [initialTopic]);
+    if (initialTopic) {
+      setQuizLoading(true);
+      fetchTopicState(initialTopic).then(data => {
+        if (data.quiz_state && data.quiz_state.quizStarted) {
+          const s = data.quiz_state;
+          setConfirmedTopic(initialTopic);
+          setQuizStarted(s.quizStarted);
+          setQuiz(s.quiz);
+          setCurrentQ(s.currentQ || 0);
+          setAnswers(s.answers || []);
+          setSubmitted(s.submitted || false);
+          setResult(s.result || null);
+          setQuizLoading(false);
+        } else {
+          startQuiz(initialTopic);
+        }
+      });
+    }
+  }, [initialTopic, startQuiz]);
 
   const handleSubmit = async () => {
     if (selectedOption === null || confidence === null || !quiz) return;
@@ -672,6 +735,7 @@ function ConfidencePage({ initialTopic }: { initialTopic?: string }) {
     if (currentQ < quiz.questions.length - 1) {
       setCurrentQ(currentQ + 1);
       setSelectedOption(null);
+      updateTopicState(confirmedTopic, 'quiz', { quizStarted, quiz, currentQ: currentQ + 1, answers: updatedAnswers, submitted, result }).catch(console.error);
       return;
     }
 
@@ -680,6 +744,7 @@ function ConfidencePage({ initialTopic }: { initialTopic?: string }) {
       const evaluation = await submitConfidenceCheck(confirmedTopic, updatedAnswers, confidence, reasoning);
       setResult(evaluation);
       setSubmitted(true);
+      updateTopicState(confirmedTopic, 'quiz', { quizStarted, quiz, currentQ, answers: updatedAnswers, submitted: true, result: evaluation }).catch(console.error);
     } catch (e: unknown) {
       setQuizError(e instanceof Error ? e.message : 'Could not evaluate answers.');
     } finally {
@@ -691,6 +756,7 @@ function ConfidencePage({ initialTopic }: { initialTopic?: string }) {
     setSubmitted(false); setResult(null); setAnswers([]); setCurrentQ(0);
     setSelectedOption(null); setConfidence(null); setReasoning('');
     setQuizStarted(false); setQuiz(null); setTopicInput(confirmedTopic);
+    updateTopicState(confirmedTopic, 'quiz', null).catch(console.error);
   };
 
   const totalQ = quiz?.questions.length ?? 2;
@@ -841,14 +907,53 @@ function ConfidencePage({ initialTopic }: { initialTopic?: string }) {
 
 function ExplainPage({ initialTopic }: { initialTopic?: string }) {
   const [text, setText] = useState('');
-  const [topic, setTopic] = useState(initialTopic || 'General');
+  const [topic, setTopic] = useState(initialTopic || '');
   const [loading, setLoading] = useState(false);
+  const [topicLoading, setTopicLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<ExplainBackResponse | null>(null);
 
+  useEffect(() => {
+    if (initialTopic) {
+      setTopic(initialTopic);
+    }
+  }, [initialTopic]);
+
+  useEffect(() => {
+    if (!topic.trim()) return;
+    const timeout = setTimeout(() => {
+      setTopicLoading(true);
+      fetchTopicState(topic.trim())
+        .then(data => {
+          if (data.explain_state) {
+            setText(data.explain_state.text || '');
+            setFeedback(data.explain_state.feedback || null);
+          } else {
+            setText('');
+            setFeedback(null);
+          }
+        })
+        .finally(() => setTopicLoading(false));
+    }, 600);
+    return () => clearTimeout(timeout);
+  }, [topic]);
+
+  const syncState = (newText: string, newFeedback: any) => {
+    if (topic.trim()) {
+      updateTopicState(topic.trim(), 'explain', { text: newText, feedback: newFeedback }).catch(console.error);
+    }
+  };
+
   const { recording, startRecording, stopRecording, voiceError } = useVoiceRecorder((transcript) => {
-    setText(prev => prev ? `${prev} ${transcript}` : transcript);
+    const newText = text ? `${text} ${transcript}` : transcript;
+    setText(newText);
+    syncState(newText, feedback);
   });
+
+  const handleTextChange = (val: string) => {
+    setText(val);
+    syncState(val, feedback);
+  };
 
   const handleSubmit = async () => {
     if (!text.trim() || loading) return;
@@ -858,6 +963,7 @@ function ExplainPage({ initialTopic }: { initialTopic?: string }) {
     try {
       const result = await submitExplainBack(topic, text);
       setFeedback(result);
+      syncState(text, result);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Something went wrong. Please try again.');
     } finally {
@@ -887,9 +993,9 @@ function ExplainPage({ initialTopic }: { initialTopic?: string }) {
           <div className="explain-input-wrap">
             <textarea
               value={text}
-              onChange={e => setText(e.target.value)}
-              placeholder="Start explaining as if you were teaching a friend..."
-              disabled={loading}
+              onChange={e => handleTextChange(e.target.value)}
+              placeholder={topicLoading ? "Loading..." : "Start explaining as if you were teaching a friend..."}
+              disabled={loading || topicLoading}
             />
             <div className="explain-tools">
               <span>{text.length} characters</span>
