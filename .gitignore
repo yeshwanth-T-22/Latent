@@ -21,3 +21,16 @@ dist-ssr
 *.sln
 *.sw?
 .env
+
+# Secrets — never commit these
+.env.local
+.env.*.local
+.dev.vars
+
+# Cloudflare
+.wrangler/
+
+# Supabase local (if using supabase CLI)
+.supabase/
+
+# Backend (removed — using Cloudflare Functions now)

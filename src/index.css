@@ -417,3 +417,41 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   .chart-x span { font-size: 8px; }
   .topbar h1 { font-size: 15px; }
 }
+
+/* ── Auth Screen ─────────────────────────────────────────────────────────── */
+.auth-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 1.5rem;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 2.5rem 2rem;
+  box-shadow: 0 4px 32px rgba(0,0,0,.06);
+}
+
+.auth-card h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 0.25rem;
+}
+
+.auth-card input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Active mic button state */
+.mic-button.active {
+  background: var(--accent);
+  color: #fff;
+}

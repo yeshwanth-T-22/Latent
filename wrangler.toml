@@ -1,0 +1,12 @@
+# Cloudflare Pages configuration
+# This file tells Pages how to build and where to find the output
+
+[build]
+command = "npm run build"
+destination = "dist"
+
+# Pages Functions (API routes) are picked up automatically from /functions directory
+# No extra config needed — Cloudflare reads functions/*.ts automatically
+
+[build.environment]
+NODE_VERSION = "20"

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUpRight,
   BarChart3,
@@ -12,6 +12,8 @@ import {
   Headphones,
   Home,
   Lightbulb,
+  LogIn,
+  LogOut,
   Menu,
   Mic,
   Moon,
@@ -25,6 +27,24 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import type { Session } from '@supabase/supabase-js';
+import {
+  supabase,
+  signIn,
+  signUp,
+  signOut,
+  onAuthStateChange,
+  sendDoubt,
+  fetchQuiz,
+  submitConfidenceCheck,
+  submitExplainBack,
+  fetchReport,
+  fetchMentor,
+  transcribeAudio,
+} from './api';
+import type { QuizQuestion, ReportTopic, MentorResponse, ExplainBackResponse } from './types';
+
+// ── Types ────────────────────────────────────────────────────────────────────
 
 type Page = 'home' | 'doubt' | 'confidence' | 'explain' | 'report' | 'mentor';
 type Theme = 'light' | 'dark';
@@ -38,12 +58,6 @@ type Topic = {
   plan: string[];
 };
 
-const topics: Topic[] = [
-  { name: 'Quadratic equations', subject: 'Mathematics', confidence: 78, understanding: 54, color: '#e0926e', plan: ['Review factoring patterns', 'Try 3 mixed examples', 'Explain the discriminant'] },
-  { name: 'Cellular respiration', subject: 'Biology', confidence: 62, understanding: 43, color: '#4ba59a', plan: ['Sketch the energy cycle', 'Connect ATP to glucose', 'Self-test key vocabulary'] },
-  { name: 'The French Revolution', subject: 'History', confidence: 71, understanding: 48, color: '#8b7eb5', plan: ['Build a cause-and-effect map', 'Order the key events', 'Summarise the outcome'] },
-];
-
 const navItems: { id: Page; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'Overview', icon: Home },
   { id: 'doubt', label: 'Doubt Solver', icon: CircleHelp },
@@ -52,14 +66,12 @@ const navItems: { id: Page; label: string; icon: typeof Home }[] = [
   { id: 'report', label: 'Weekly Report', icon: BarChart3 },
 ];
 
-function Logo() {
-  return (
-    <div className="brand-lockup">
-      <div className="brand-mark"><img src="/assets/icons/Latent_Reveal_Icon copy.png" alt="Latent" /></div>
-      <span>latent</span>
-    </div>
-  );
-}
+const TOPIC_COLORS = ['#e0926e', '#4ba59a', '#8b7eb5', '#e0b86e', '#6e9ee0', '#a5604b'];
+function topicColor(index: number) { return TOPIC_COLORS[index % TOPIC_COLORS.length]; }
+
+const DEFAULT_TOPIC = 'Quadratic equations';
+
+// ── Shared hooks ─────────────────────────────────────────────────────────────
 
 function useTheme() {
   const [theme, setTheme] = useState<Theme>('light');
@@ -75,7 +87,148 @@ function useTheme() {
   return { theme, toggle };
 }
 
-function Sidebar({ page, setPage, open, setOpen }: { page: Page; setPage: (page: Page) => void; open: boolean; setOpen: (open: boolean) => void }) {
+function useVoiceRecorder(onTranscript: (text: string) => void) {
+  const [recording, setRecording] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  async function startRecording() {
+    setVoiceError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorder.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        try {
+          const { transcription } = await transcribeAudio(blob);
+          onTranscript(transcription);
+        } catch (e: unknown) {
+          setVoiceError(e instanceof Error ? e.message : 'Voice transcription failed.');
+        }
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setRecording(true);
+    } catch {
+      setVoiceError('Microphone access denied. Please allow mic access and try again.');
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorderRef.current && recording) {
+      mediaRecorderRef.current.stop();
+      setRecording(false);
+    }
+  }
+
+  return { recording, startRecording, stopRecording, voiceError };
+}
+
+// ── Auth Screen ───────────────────────────────────────────────────────────────
+
+function AuthScreen({ onAuth }: { onAuth: () => void }) {
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setMessage(null);
+    setLoading(true);
+    try {
+      if (mode === 'signup') {
+        const { error } = await signUp(email, password, displayName || 'Student');
+        if (error) throw error;
+        setMessage('Account created! Check your email to confirm, then sign in.');
+        setMode('signin');
+      } else {
+        const { error } = await signIn(email, password);
+        if (error) throw error;
+        onAuth();
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Authentication failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="auth-screen">
+      <div className="auth-card">
+        <div className="brand-lockup" style={{ marginBottom: '2rem' }}>
+          <div className="brand-mark"><img src="/assets/icons/Latent_Reveal_Icon copy.png" alt="Latent" /></div>
+          <span>latent</span>
+        </div>
+        <h2>{mode === 'signin' ? 'Welcome back' : 'Get started'}</h2>
+        <p className="lede">{mode === 'signin' ? 'Sign in to your learning space.' : 'Create your Latent account.'}</p>
+        {error && <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>{error}</p>}
+        {message && <p style={{ color: 'var(--accent)', fontSize: '0.875rem', marginBottom: '1rem' }}>{message}</p>}
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {mode === 'signup' && (
+            <input
+              type="text"
+              placeholder="Your name"
+              value={displayName}
+              onChange={e => setDisplayName(e.target.value)}
+              style={{ padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: '1rem' }}
+            />
+          )}
+          <input
+            type="email"
+            placeholder="Email address"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            required
+            style={{ padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: '1rem' }}
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            required
+            style={{ padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: '1rem' }}
+          />
+          <button className="primary-button" type="submit" disabled={loading} style={{ marginTop: '0.5rem' }}>
+            <LogIn size={17} /> {loading ? 'Please wait…' : mode === 'signin' ? 'Sign in' : 'Create account'}
+          </button>
+        </form>
+        <button
+          className="text-button"
+          style={{ marginTop: '1.5rem', display: 'block', width: '100%', textAlign: 'center' }}
+          onClick={() => { setMode(m => m === 'signin' ? 'signup' : 'signin'); setError(null); setMessage(null); }}
+        >
+          {mode === 'signin' ? "Don't have an account? Sign up" : 'Already have an account? Sign in'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Shared components (unchanged visuals) ─────────────────────────────────────
+
+function Logo() {
+  return (
+    <div className="brand-lockup">
+      <div className="brand-mark"><img src="/assets/icons/Latent_Reveal_Icon copy.png" alt="Latent" /></div>
+      <span>latent</span>
+    </div>
+  );
+}
+
+function Sidebar({ page, setPage, open, setOpen, onSignOut }: {
+  page: Page; setPage: (page: Page) => void; open: boolean; setOpen: (open: boolean) => void; onSignOut: () => void;
+}) {
   return (
     <>
       {open && <button className="mobile-scrim" onClick={() => setOpen(false)} aria-label="Close menu" />}
@@ -95,16 +248,26 @@ function Sidebar({ page, setPage, open, setOpen }: { page: Page; setPage: (page:
           ))}
         </nav>
         <div className="sidebar-footer">
-          <button className={`nav-item ${page === 'mentor' ? 'active' : ''}`} onClick={() => { setPage('mentor'); setOpen(false); }}><Compass size={18} /><span>Mentor view</span></button>
+          <button className={`nav-item ${page === 'mentor' ? 'active' : ''}`} onClick={() => { setPage('mentor'); setOpen(false); }}>
+            <Compass size={18} /><span>Mentor view</span>
+          </button>
           <div className="sidebar-divider" />
-          <div className="profile-row"><div className="avatar small">AK</div><div><strong>Alex Kim</strong><span>Year 11 · Student</span></div><MoreHorizontal size={18} className="muted-icon" /></div>
+          <div className="profile-row">
+            <div className="avatar small">AK</div>
+            <div><strong>Alex Kim</strong><span>Year 11 · Student</span></div>
+            <button onClick={onSignOut} title="Sign out" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
+              <LogOut size={16} />
+            </button>
+          </div>
         </div>
       </aside>
     </>
   );
 }
 
-function Topbar({ onMenu, eyebrow, title, action, theme, toggleTheme }: { onMenu: () => void; eyebrow: string; title: string; action?: React.ReactNode; theme: Theme; toggleTheme: () => void }) {
+function Topbar({ onMenu, eyebrow, title, action, theme, toggleTheme }: {
+  onMenu: () => void; eyebrow: string; title: string; action?: React.ReactNode; theme: Theme; toggleTheme: () => void;
+}) {
   return (
     <header className="topbar">
       <button className="menu-button" onClick={onMenu} aria-label="Open menu"><Menu size={21} /></button>
@@ -124,7 +287,9 @@ function Topbar({ onMenu, eyebrow, title, action, theme, toggleTheme }: { onMenu
   );
 }
 
-function StatCard({ icon: Icon, label, value, detail, tone, progress }: { icon: typeof Brain; label: string; value: string; detail: string; tone: string; progress?: number }) {
+function StatCard({ icon: Icon, label, value, detail, tone, progress }: {
+  icon: typeof Brain; label: string; value: string; detail: string; tone: string; progress?: number;
+}) {
   return (
     <div className="stat-card">
       <div className={`stat-icon ${tone}`}><Icon size={19} /></div>
@@ -154,7 +319,7 @@ function TopicCard({ topic, compact = false }: { topic: Topic; compact?: boolean
         <div className="bar-label"><span>Understanding</span><strong>{topic.understanding}%</strong></div>
         <div className="bar-track"><i className="understanding-fill" style={{ width: `${topic.understanding}%` }} /></div>
       </div>
-      {!compact && (
+      {!compact && topic.plan.length > 0 && (
         <div className="plan">
           <span className="plan-label">REVISION PLAN</span>
           {topic.plan.map(item => <div className="plan-item" key={item}><Check size={13} />{item}</div>)}
@@ -164,7 +329,9 @@ function TopicCard({ topic, compact = false }: { topic: Topic; compact?: boolean
   );
 }
 
-function Activity({ icon: Icon, title, subtitle, time, color }: { icon: typeof PenLine; title: string; subtitle: string; time: string; color: string }) {
+function Activity({ icon: Icon, title, subtitle, time, color }: {
+  icon: typeof PenLine; title: string; subtitle: string; time: string; color: string;
+}) {
   return (
     <div className="activity-item">
       <div className={`activity-icon ${color}`}><Icon size={16} /></div>
@@ -174,20 +341,59 @@ function Activity({ icon: Icon, title, subtitle, time, color }: { icon: typeof P
   );
 }
 
-function HomePage({ setPage }: { setPage: (p: Page) => void }) {
+// ── Pages ─────────────────────────────────────────────────────────────────────
+
+function HomePage({ setPage, session }: { setPage: (p: Page) => void; session: Session }) {
+  const [topics, setTopics] = useState<Topic[]>([]);
+  const [weakSpotsCount, setWeakSpotsCount] = useState(0);
+  const [topicsCount, setTopicsCount] = useState(0);
+  const [focusTopic, setFocusTopic] = useState<Topic | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const displayName = session.user.user_metadata?.display_name || 'Alex';
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).toUpperCase();
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+
+  useEffect(() => {
+    fetchReport()
+      .then(data => {
+        const mapped: Topic[] = data.topics.map((t, i) => ({
+          name: t.name,
+          subject: t.subject || '',
+          confidence: t.confidenceScore,
+          understanding: t.trueUnderstandingScore,
+          color: topicColor(i),
+          plan: t.plan,
+        }));
+        setTopics(mapped);
+        setWeakSpotsCount(data.weakSpots.length);
+        setTopicsCount(data.topics.length);
+        const sorted = [...data.topics].sort(
+          (a, b) => (b.confidenceScore - b.trueUnderstandingScore) - (a.confidenceScore - a.trueUnderstandingScore)
+        );
+        if (sorted[0]) {
+          const idx = data.topics.indexOf(sorted[0]);
+          setFocusTopic(mapped[idx]);
+        }
+      })
+      .catch(() => { /* silently fall back */ })
+      .finally(() => setLoading(false));
+  }, []);
+
   return (
     <div className="page-content home-page">
       <div className="welcome-row">
         <div>
-          <div className="eyebrow">TUESDAY, 14 MAY 2024</div>
-          <h2>Good morning, Alex <span className="wave">/</span></h2>
+          <div className="eyebrow">{today}</div>
+          <h2>{greeting}, {displayName} <span className="wave">/</span></h2>
           <p className="lede">A little progress today goes a long way.</p>
         </div>
         <button className="primary-button" onClick={() => setPage('doubt')}><Plus size={17} /> New study session</button>
       </div>
       <div className="stats-grid">
-        <StatCard icon={BookOpen} label="Topics studied" value="12" detail="+3 this week" tone="peach" />
-        <StatCard icon={Brain} label="Current weak spots" value="3" detail="A little attention needed" tone="mint" progress={43} />
+        <StatCard icon={BookOpen} label="Topics studied" value={loading ? '…' : String(topicsCount)} detail="+3 this week" tone="peach" />
+        <StatCard icon={Brain} label="Current weak spots" value={loading ? '…' : String(weakSpotsCount)} detail="A little attention needed" tone="mint" progress={weakSpotsCount > 0 ? Math.min(100, weakSpotsCount * 15) : 0} />
         <StatCard icon={Zap} label="Study streak" value="7 days" detail="Best: 14 days" tone="lavender" />
       </div>
       <section className="section-block">
@@ -200,15 +406,17 @@ function HomePage({ setPage }: { setPage: (p: Page) => void }) {
             <div className="focus-top">
               <div>
                 <span className="card-kicker">FOCUS TOPIC</span>
-                <h3>Quadratic equations</h3>
-                <p>You're getting there. One more focused session could close the gap.</p>
+                <h3>{focusTopic ? focusTopic.name : (loading ? '…' : 'No topics yet')}</h3>
+                <p>{focusTopic ? "You're getting there. One more focused session could close the gap." : 'Start a study session to track your topics.'}</p>
               </div>
-              <div className="focus-score">54<small>%</small></div>
+              <div className="focus-score">{focusTopic ? focusTopic.understanding : '–'}{focusTopic && <small>%</small>}</div>
             </div>
-            <div className="focus-visual">
-              <div className="focus-line"><span>Confidence</span><i style={{ width: '78%' }} /><b>78%</b></div>
-              <div className="focus-line"><span>Understanding</span><i style={{ width: '54%' }} /><b>54%</b></div>
-            </div>
+            {focusTopic && (
+              <div className="focus-visual">
+                <div className="focus-line"><span>Confidence</span><i style={{ width: `${focusTopic.confidence}%` }} /><b>{focusTopic.confidence}%</b></div>
+                <div className="focus-line"><span>Understanding</span><i style={{ width: `${focusTopic.understanding}%` }} /><b>{focusTopic.understanding}%</b></div>
+              </div>
+            )}
             <button className="light-button" onClick={() => setPage('explain')}>Work on this topic <ChevronRight size={16} /></button>
           </div>
           <div className="activity-card">
@@ -231,7 +439,12 @@ function HomePage({ setPage }: { setPage: (p: Page) => void }) {
           <button className="text-button" onClick={() => setPage('report')}>See all topics <ArrowUpRight size={16} /></button>
         </div>
         <div className="topic-preview-grid">
-          {topics.map(topic => <TopicCard key={topic.name} topic={topic} compact />)}
+          {loading
+            ? <p className="lede">Loading your topics…</p>
+            : topics.length === 0
+              ? <p className="lede">No topics yet — start a study session!</p>
+              : topics.map(topic => <TopicCard key={topic.name} topic={topic} compact />)
+          }
         </div>
       </section>
     </div>
@@ -239,23 +452,48 @@ function HomePage({ setPage }: { setPage: (p: Page) => void }) {
 }
 
 function DoubtPage() {
+  const [topic] = useState(DEFAULT_TOPIC);
   const [messages, setMessages] = useState([
-    { role: 'ai', text: 'Hey Alex. What are you working through today?', time: '10:42 AM' },
-    { role: 'user', text: 'I\u2019m stuck on why the quadratic formula works, not just how to use it.', time: '10:43 AM' },
-    { role: 'ai', text: 'That\u2019s a really useful question to ask. The formula comes from completing the square on a general quadratic — so it\u2019s not a trick to memorise, it\u2019s a shortcut for a process you already know.', time: '10:43 AM' },
+    { role: 'ai', text: 'Hey! What are you working through today?', time: '10:42 AM' },
   ]);
   const [draft, setDraft] = useState('');
-  const send = () => {
-    if (!draft.trim()) return;
-    setMessages([...messages, { role: 'user', text: draft, time: 'Now' }]);
-    setDraft('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const addMessage = (role: 'ai' | 'user', text: string) => {
+    const time = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    setMessages(prev => [...prev, { role, text, time }]);
   };
+
+  const send = async (text?: string) => {
+    const question = (text ?? draft).trim();
+    if (!question || loading) return;
+    setDraft('');
+    setError(null);
+    addMessage('user', question);
+    setLoading(true);
+    try {
+      const { answer } = await sendDoubt(topic, question);
+      addMessage('ai', answer);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Something went wrong. Please try again.';
+      setError(msg);
+      addMessage('ai', msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const { recording, startRecording, stopRecording, voiceError } = useVoiceRecorder((transcript) => {
+    setDraft(transcript);
+  });
+
   return (
     <div className="page-content full-height-page">
       <div className="chat-layout">
         <div className="chat-main">
           <div className="context-pill">
-            <BookOpen size={14} /> Learning with Alex <span>•</span> Quadratic equations <ChevronRight size={14} />
+            <BookOpen size={14} /> Learning session <span>•</span> {topic} <ChevronRight size={14} />
           </div>
           <div className="message-thread">
             {messages.map((message, index) => (
@@ -266,7 +504,7 @@ function DoubtPage() {
                 <div className="message-content">
                   <div className="message-name">{message.role === 'ai' ? 'Latent' : 'You'} <span>{message.time}</span></div>
                   <div className="message-bubble">{message.text}</div>
-                  {message.role === 'ai' && index === 2 && (
+                  {message.role === 'ai' && index === messages.length - 1 && !loading && (
                     <div className="message-actions">
                       <button><Lightbulb size={14} /> See an example</button>
                       <button><Headphones size={14} /> Listen</button>
@@ -275,7 +513,21 @@ function DoubtPage() {
                 </div>
               </div>
             ))}
+            {loading && (
+              <div className="message-row ai">
+                <div className="message-avatar ai"><img src="/assets/icons/Latent_Reveal_Icon copy.png" alt="Latent" /></div>
+                <div className="message-content">
+                  <div className="message-name">Latent <span>…</span></div>
+                  <div className="message-bubble" style={{ opacity: 0.5 }}>Thinking…</div>
+                </div>
+              </div>
+            )}
           </div>
+          {(error || voiceError) && (
+            <div className="message-bubble" style={{ margin: '0 1rem 0.5rem', color: 'var(--text-muted)' }}>
+              {voiceError || error}
+            </div>
+          )}
           <div className="chat-composer">
             <div className="composer-input">
               <textarea
@@ -284,16 +536,25 @@ function DoubtPage() {
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
                 placeholder="Ask anything about your topic..."
                 rows={1}
+                disabled={loading}
               />
-              <button className="mic-button"><Mic size={19} /></button>
-              <button className="send-button" onClick={send}><Send size={17} /></button>
+              <button
+                className={`mic-button ${recording ? 'active' : ''}`}
+                onClick={recording ? stopRecording : startRecording}
+                aria-label={recording ? 'Stop recording' : 'Start voice input'}
+              >
+                <Mic size={19} />
+              </button>
+              <button className="send-button" onClick={() => send()} disabled={loading || !draft.trim()}>
+                <Send size={17} />
+              </button>
             </div>
             <span className="composer-hint">Press Enter to send <span>•</span> Latent helps you think, not just answer.</span>
           </div>
         </div>
         <aside className="chat-aside">
           <div className="aside-kicker">SESSION NOTES</div>
-          <h3>Quadratic equations</h3>
+          <h3>{topic}</h3>
           <p>Keep these ideas close while you work through the topic.</p>
           <div className="note-block">
             <span className="note-number">01</span>
@@ -313,29 +574,95 @@ function DoubtPage() {
 }
 
 function ConfidencePage() {
+  const topic = DEFAULT_TOPIC;
+  const [quiz, setQuiz] = useState<{ questions: QuizQuestion[] } | null>(null);
+  const [quizLoading, setQuizLoading] = useState(true);
+  const [quizError, setQuizError] = useState<string | null>(null);
+  const [currentQ, setCurrentQ] = useState(0);
+  const [answers, setAnswers] = useState<{ questionText: string; chosenOption: string; correct: boolean }[]>([]);
+  const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [confidence, setConfidence] = useState<number | null>(null);
+  const [reasoning, setReasoning] = useState('');
   const [submitted, setSubmitted] = useState(false);
-  const [answer, setAnswer] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{ trueScore: number; isWeakSpot: boolean; feedback: string; gotRight: string[]; toStrengthen: string[] } | null>(null);
+
+  const loadQuiz = () => {
+    setQuizLoading(true);
+    setQuizError(null);
+    fetchQuiz(topic)
+      .then(data => setQuiz(data))
+      .catch(e => setQuizError(e instanceof Error ? e.message : 'Failed to load quiz.'))
+      .finally(() => setQuizLoading(false));
+  };
+
+  useEffect(() => { loadQuiz(); }, []);
+
+  const handleSubmit = async () => {
+    if (selectedOption === null || confidence === null || !quiz) return;
+    const q = quiz.questions[currentQ];
+    const isCorrect = selectedOption === q.correct;
+    const updatedAnswers = [...answers, { questionText: q.text, chosenOption: q.options[selectedOption], correct: isCorrect }];
+    setAnswers(updatedAnswers);
+
+    if (currentQ < quiz.questions.length - 1) {
+      setCurrentQ(currentQ + 1);
+      setSelectedOption(null);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const evaluation = await submitConfidenceCheck(topic, updatedAnswers, confidence, reasoning);
+      setResult(evaluation);
+      setSubmitted(true);
+    } catch (e: unknown) {
+      setQuizError(e instanceof Error ? e.message : 'Could not evaluate answers.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const resetQuiz = () => {
+    setSubmitted(false);
+    setResult(null);
+    setAnswers([]);
+    setCurrentQ(0);
+    setSelectedOption(null);
+    setConfidence(null);
+    setReasoning('');
+    loadQuiz();
+  };
+
+  const totalQ = quiz?.questions.length ?? 2;
+  const progress = submitted ? 100 : ((currentQ + (selectedOption !== null ? 0.5 : 0)) / totalQ) * 100;
 
   return (
     <div className="page-content">
       <div className="quiz-wrap">
         <div className="quiz-progress">
           <span>CONFIDENCE CHECK</span>
-          <span>1 of 2 questions</span>
+          <span>{submitted ? 'Complete' : `${currentQ + 1} of ${totalQ} questions`}</span>
         </div>
-        <div className="quiz-bar"><i style={{ width: submitted ? '100%' : '50%' }} /></div>
-        {!submitted ? (
+        <div className="quiz-bar"><i style={{ width: `${progress}%` }} /></div>
+
+        {quizLoading && <p className="lede" style={{ marginTop: '2rem' }}>Generating your quiz…</p>}
+        {quizError && <p className="lede" style={{ marginTop: '2rem', color: 'var(--text-muted)' }}>{quizError}</p>}
+
+        {!quizLoading && !quizError && quiz && !submitted && (
           <>
             <div className="quiz-topic">
               <span className="topic-dot" style={{ background: '#e0926e', color: '#e0926e' }} />
-              Mathematics <span>•</span> Quadratic equations
+              Mathematics <span>•</span> {topic}
             </div>
-            <h2>What happens to the graph of<br /> <em>y = x²</em> when we add 3?</h2>
+            <h2>{quiz.questions[currentQ].text}</h2>
             <div className="answer-options">
-              <button className={answer === 'up' ? 'selected' : ''} onClick={() => setAnswer('up')}><span>A</span>It shifts 3 units up {answer === 'up' && <Check size={17} />}</button>
-              <button className={answer === 'down' ? 'selected' : ''} onClick={() => setAnswer('down')}><span>B</span>It shifts 3 units down {answer === 'down' && <Check size={17} />}</button>
-              <button className={answer === 'wide' ? 'selected' : ''} onClick={() => setAnswer('wide')}><span>C</span>It becomes wider {answer === 'wide' && <Check size={17} />}</button>
+              {quiz.questions[currentQ].options.map((opt, i) => (
+                <button key={i} className={selectedOption === i ? 'selected' : ''} onClick={() => setSelectedOption(i)}>
+                  <span>{String.fromCharCode(65 + i)}</span>{opt}
+                  {selectedOption === i && <Check size={17} />}
+                </button>
+              ))}
             </div>
             <div className="confidence-prompt">
               <div>
@@ -351,24 +678,51 @@ function ConfidencePage() {
                 ))}
               </div>
             </div>
-            <button className="primary-button wide" disabled={!answer || !confidence} onClick={() => setSubmitted(true)}>
-              Check my answer <ArrowUpRight size={16} />
+            {currentQ === totalQ - 1 && (
+              <div style={{ marginTop: '1rem' }}>
+                <label className="field-label">Why did you choose this? (helps Latent assess your reasoning)</label>
+                <textarea
+                  value={reasoning}
+                  onChange={e => setReasoning(e.target.value)}
+                  placeholder="e.g. I remembered that adding outside the bracket shifts the graph vertically..."
+                  rows={2}
+                  style={{ width: '100%', marginTop: '0.5rem', resize: 'vertical' }}
+                />
+              </div>
+            )}
+            <button
+              className="primary-button wide"
+              disabled={selectedOption === null || confidence === null || submitting}
+              onClick={handleSubmit}
+            >
+              {submitting ? 'Evaluating…' : currentQ < totalQ - 1 ? 'Next question' : 'Check my answer'} <ArrowUpRight size={16} />
             </button>
           </>
-        ) : (
+        )}
+
+        {submitted && result && (
           <div className="result-card">
             <div className="result-mark"><Check size={25} /></div>
-            <span className="card-kicker">A THOUGHTFUL ANSWER</span>
-            <h2>You were confident <em>and</em> correct.</h2>
-            <p>You chose the right answer and your confidence was {confidence}/5. Nice — your intuition is catching up with your knowledge.</p>
+            <span className="card-kicker">{result.isWeakSpot ? 'SOMETHING TO WORK ON' : 'A THOUGHTFUL ANSWER'}</span>
+            <h2>{result.isWeakSpot ? 'Worth revisiting.' : 'You understood this well.'}</h2>
+            <p>{result.feedback} <em>True understanding score: {result.trueScore}/100.</em></p>
             <div className="result-insight">
               <Lightbulb size={18} />
               <div>
-                <strong>Keep building the connection</strong>
-                <span>Adding a positive number outside the square moves the entire graph up.</span>
+                <strong>What you got right</strong>
+                <span>{result.gotRight.join(' · ')}</span>
               </div>
             </div>
-            <button className="primary-button" onClick={() => { setSubmitted(false); setAnswer(''); setConfidence(null); }}>
+            {result.toStrengthen.length > 0 && (
+              <div className="result-insight" style={{ marginTop: '0.5rem' }}>
+                <Brain size={18} />
+                <div>
+                  <strong>To strengthen</strong>
+                  <span>{result.toStrengthen.join(' · ')}</span>
+                </div>
+              </div>
+            )}
+            <button className="primary-button" onClick={resetQuiz}>
               Try another question <ChevronRight size={16} />
             </button>
           </div>
@@ -387,6 +741,30 @@ function ConfidencePage() {
 
 function ExplainPage() {
   const [text, setText] = useState('');
+  const [topic] = useState('Cellular respiration');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<ExplainBackResponse | null>(null);
+
+  const { recording, startRecording, stopRecording, voiceError } = useVoiceRecorder((transcript) => {
+    setText(prev => prev ? `${prev} ${transcript}` : transcript);
+  });
+
+  const handleSubmit = async () => {
+    if (!text.trim() || loading) return;
+    setLoading(true);
+    setError(null);
+    setFeedback(null);
+    try {
+      const result = await submitExplainBack(topic, text);
+      setFeedback(result);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="page-content">
       <div className="explain-layout">
@@ -397,7 +775,7 @@ function ExplainPage() {
           <label className="field-label">What do you want to explain?</label>
           <div className="topic-select">
             <span className="topic-dot" style={{ background: '#4ba59a', color: '#4ba59a' }} />
-            Cellular respiration
+            {topic}
             <ChevronRight size={17} />
           </div>
           <label className="field-label">Your explanation</label>
@@ -406,38 +784,61 @@ function ExplainPage() {
               value={text}
               onChange={e => setText(e.target.value)}
               placeholder="Start explaining as if you were teaching a friend..."
+              disabled={loading}
             />
             <div className="explain-tools">
               <span>{text.length} characters</span>
-              <button className="mic-button"><Mic size={19} /></button>
+              <button
+                className={`mic-button ${recording ? 'active' : ''}`}
+                onClick={recording ? stopRecording : startRecording}
+                aria-label={recording ? 'Stop recording' : 'Start voice input'}
+              >
+                <Mic size={19} />
+              </button>
             </div>
           </div>
-          <button className="primary-button" disabled={!text.trim()}><PenLine size={16} /> Get thoughtful feedback</button>
+          {(error || voiceError) && (
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.5rem' }}>{error || voiceError}</p>
+          )}
+          <button className="primary-button" disabled={!text.trim() || loading} onClick={handleSubmit}>
+            <PenLine size={16} /> {loading ? 'Latent is reading…' : 'Get thoughtful feedback'}
+          </button>
         </div>
         <div className="feedback-card">
           <div className="feedback-header">
             <div className="feedback-icon"><Brain size={19} /></div>
             <div>
               <span className="card-kicker">YOUR FEEDBACK</span>
-              <h3>It will appear here</h3>
+              <h3>{feedback ? `Understanding score: ${feedback.trueScore}/100` : 'It will appear here'}</h3>
             </div>
           </div>
-          <div className="feedback-placeholder">
-            <div className="placeholder-line long" />
-            <div className="placeholder-line" />
-            <div className="placeholder-line short" />
-          </div>
+          {!feedback && (
+            <div className="feedback-placeholder">
+              <div className="placeholder-line long" />
+              <div className="placeholder-line" />
+              <div className="placeholder-line short" />
+            </div>
+          )}
+          {feedback && <p style={{ marginBottom: '1rem', fontSize: '0.9375rem' }}>{feedback.summary}</p>}
           <div className="feedback-points">
             <div>
               <span className="point-icon right"><Check size={14} /></span>
-              <span><strong>What you got right</strong><small>Clear ideas and strong connections</small></span>
+              <span>
+                <strong>What you got right</strong>
+                {feedback ? <small>{feedback.gotRight.join(', ')}</small> : <small>Clear ideas and strong connections</small>}
+              </span>
             </div>
             <div>
               <span className="point-icon improve"><Lightbulb size={14} /></span>
-              <span><strong>What to strengthen</strong><small>Gaps worth looking at again</small></span>
+              <span>
+                <strong>What to strengthen</strong>
+                {feedback ? <small>{feedback.toStrengthen.join(', ')}</small> : <small>Gaps worth looking at again</small>}
+              </span>
             </div>
           </div>
-          <p className="feedback-note">Write at least a few sentences and Latent will read between the lines.</p>
+          {!feedback && (
+            <p className="feedback-note">Write at least a few sentences and Latent will read between the lines.</p>
+          )}
         </div>
       </div>
     </div>
@@ -445,11 +846,35 @@ function ExplainPage() {
 }
 
 function ReportPage() {
+  const [topics, setTopics] = useState<Topic[]>([]);
+  const [weekLabel, setWeekLabel] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchReport()
+      .then(data => {
+        setWeekLabel(data.weekLabel);
+        setTopics(
+          data.topics.map((t: ReportTopic, i: number) => ({
+            name: t.name,
+            subject: t.subject || '',
+            confidence: t.confidenceScore,
+            understanding: t.trueUnderstandingScore,
+            color: topicColor(i),
+            plan: t.plan,
+          }))
+        );
+      })
+      .catch(e => setError(e instanceof Error ? e.message : 'Could not load report.'))
+      .finally(() => setLoading(false));
+  }, []);
+
   return (
     <div className="page-content">
       <div className="report-intro">
         <div>
-          <div className="eyebrow">WEEK OF 13–19 MAY</div>
+          <div className="eyebrow">WEEK OF {weekLabel || '…'}</div>
           <h2>Your weekly weak-spot report.</h2>
           <p className="lede">A gentle nudge toward the topics that could use a little more time.</p>
         </div>
@@ -466,85 +891,136 @@ function ReportPage() {
           <span><i className="legend-understanding" /> Understanding</span>
         </div>
       </div>
+      {loading && <p className="lede" style={{ marginTop: '2rem' }}>Loading your report…</p>}
+      {error && <p className="lede" style={{ marginTop: '2rem', color: 'var(--text-muted)' }}>{error}</p>}
       <div className="report-grid">
         {topics.map(topic => <TopicCard key={topic.name} topic={topic} />)}
+        {!loading && topics.length === 0 && !error && (
+          <p className="lede">No topics tracked yet. Start studying to see your report here.</p>
+        )}
       </div>
     </div>
   );
 }
 
 function MentorPage() {
+  const [data, setData] = useState<MentorResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchMentor()
+      .then(setData)
+      .catch(e => setError(e instanceof Error ? e.message : 'Could not load mentor view.'))
+      .finally(() => setLoading(false));
+  }, []);
+
   return (
     <div className="page-content">
       <div className="report-intro">
         <div>
           <div className="eyebrow">READ-ONLY VIEW</div>
-          <h2>Alex's learning journey.</h2>
+          <h2>Your learning journey.</h2>
           <p className="lede">A clear, encouraging snapshot of progress over time.</p>
         </div>
         <div className="mentor-badge">
           <div className="avatar small">AK</div>
-          <span>Alex Kim</span>
+          <span>{data?.displayName || 'Student'}</span>
         </div>
       </div>
-      <div className="mentor-grid">
-        <div className="trend-card">
-          <div className="card-heading">
-            <div>
-              <span className="card-kicker">UNDERSTANDING OVER TIME</span>
-              <h3>A steady climb</h3>
+      {loading && <p className="lede">Loading mentor data…</p>}
+      {error && <p className="lede" style={{ color: 'var(--text-muted)' }}>{error}</p>}
+      {data && (
+        <div className="mentor-grid">
+          <div className="trend-card">
+            <div className="card-heading">
+              <div>
+                <span className="card-kicker">UNDERSTANDING OVER TIME</span>
+                <h3>A steady climb</h3>
+              </div>
+              <button className="light-button small-button">Last 4 weeks <ChevronRight size={14} /></button>
             </div>
-            <button className="light-button small-button">Last 4 weeks <ChevronRight size={14} /></button>
-          </div>
-          <div className="chart">
-            <div className="chart-y">
-              <span>100</span><span>75</span><span>50</span><span>25</span><span>0</span>
-            </div>
-            <div className="chart-area">
-              <div className="grid-lines"><i /><i /><i /><i /><i /></div>
-              <svg viewBox="0 0 620 220" preserveAspectRatio="none">
-                <path d="M0 190 C70 183, 76 155, 140 163 S215 128, 275 140 S350 101, 400 112 S485 65, 535 79 S588 38, 620 47" fill="none" stroke="var(--accent)" strokeWidth="4" strokeLinecap="round" />
-                <path d="M0 190 C70 183, 76 155, 140 163 S215 128, 275 140 S350 101, 400 112 S485 65, 535 79 S588 38, 620 47 L620 220 L0 220Z" fill="url(#chartFill)" opacity=".22" />
-                <defs>
-                  <linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1">
-                    <stop stopColor="var(--accent-2)" />
-                    <stop offset="1" stopColor="transparent" />
-                  </linearGradient>
-                </defs>
-              </svg>
-              <div className="chart-x">
-                <span>22 Apr</span><span>29 Apr</span><span>06 May</span><span>13 May</span>
+            <div className="chart">
+              <div className="chart-y">
+                <span>100</span><span>75</span><span>50</span><span>25</span><span>0</span>
+              </div>
+              <div className="chart-area">
+                <div className="grid-lines"><i /><i /><i /><i /><i /></div>
+                <svg viewBox="0 0 620 220" preserveAspectRatio="none">
+                  <path d="M0 190 C70 183, 76 155, 140 163 S215 128, 275 140 S350 101, 400 112 S485 65, 535 79 S588 38, 620 47" fill="none" stroke="var(--accent)" strokeWidth="4" strokeLinecap="round" />
+                  <path d="M0 190 C70 183, 76 155, 140 163 S215 128, 275 140 S350 101, 400 112 S485 65, 535 79 S588 38, 620 47 L620 220 L0 220Z" fill="url(#chartFill)" opacity=".22" />
+                  <defs>
+                    <linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1">
+                      <stop stopColor="var(--accent-2)" />
+                      <stop offset="1" stopColor="transparent" />
+                    </linearGradient>
+                  </defs>
+                </svg>
+                <div className="chart-x">
+                  <span>22 Apr</span><span>29 Apr</span><span>06 May</span><span>13 May</span>
+                </div>
               </div>
             </div>
           </div>
+          <div className="mentor-side">
+            <div className="mentor-stat">
+              <span className="stat-icon mint"><TrendingUp size={18} /></span>
+              <div>
+                <span>Average understanding</span>
+                <strong>{data.averageUnderstanding}%</strong>
+                <small>{data.topicsCount} topics tracked</small>
+              </div>
+            </div>
+            <div className="mentor-stat">
+              <span className="stat-icon peach"><Clock3 size={18} /></span>
+              <div>
+                <span>Weak spots</span>
+                <strong>{data.weakSpotsCount}</strong>
+                <small>Topics needing attention</small>
+              </div>
+            </div>
+            <div className="encouragement">
+              <BookOpen size={18} />
+              <strong>A note from Latent</strong>
+              <p>{data.mentorNote}</p>
+            </div>
+          </div>
         </div>
-        <div className="mentor-side">
-          <div className="mentor-stat">
-            <span className="stat-icon mint"><TrendingUp size={18} /></span>
-            <div><span>Average understanding</span><strong>68%</strong><small>+12% this month</small></div>
-          </div>
-          <div className="mentor-stat">
-            <span className="stat-icon peach"><Clock3 size={18} /></span>
-            <div><span>Time learning</span><strong>4h 20m</strong><small>Across 6 sessions</small></div>
-          </div>
-          <div className="encouragement">
-            <BookOpen size={18} />
-            <strong>A note from Latent</strong>
-            <p>Alex is showing up consistently and asking deeper questions. The confidence–understanding gap is narrowing.</p>
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
 
+// ── App shell ────────────────────────────────────────────────────────────────
+
 function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [page, setPage] = useState<Page>('home');
   const [menuOpen, setMenuOpen] = useState(false);
   const { theme, toggle } = useTheme();
 
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setAuthLoading(false);
+    });
+
+    const { data: { subscription } } = onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleSignOut = async () => {
+    await signOut();
+    setSession(null);
+    setPage('home');
+  };
+
   const pageMeta = useMemo(() => ({
-    home: ['OVERVIEW', 'Good morning, Alex'],
+    home: ['OVERVIEW', 'Good morning'],
     doubt: ['DOUBT SOLVER', 'Let\u2019s work it through'],
     confidence: ['CONFIDENCE CHECK', 'See what you know'],
     explain: ['EXPLAIN-BACK', 'Make it make sense'],
@@ -552,9 +1028,21 @@ function App() {
     mentor: ['MENTOR VIEW', 'Progress, in context'],
   }[page]), [page]);
 
+  if (authLoading) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh' }}>
+        <p className="lede">Loading…</p>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <AuthScreen onAuth={() => { /* session update comes via onAuthStateChange */ }} />;
+  }
+
   return (
     <div className="app-shell">
-      <Sidebar page={page} setPage={setPage} open={menuOpen} setOpen={setMenuOpen} />
+      <Sidebar page={page} setPage={setPage} open={menuOpen} setOpen={setMenuOpen} onSignOut={handleSignOut} />
       <main className="main-area">
         <Topbar
           onMenu={() => setMenuOpen(true)}
@@ -564,7 +1052,7 @@ function App() {
           theme={theme}
           toggleTheme={toggle}
         />
-        {page === 'home' && <HomePage setPage={setPage} />}
+        {page === 'home' && <HomePage setPage={setPage} session={session} />}
         {page === 'doubt' && <DoubtPage />}
         {page === 'confidence' && <ConfidencePage />}
         {page === 'explain' && <ExplainPage />}
