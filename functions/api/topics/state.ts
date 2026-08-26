@@ -1,5 +1,5 @@
 import type { EventContext } from '@cloudflare/workers-types';
-import { getAuthUser, json, errorResponse, createSupabaseClient } from '../_shared/supabase';
+import { getAuthUser, json, errorResponse, getAdminClient } from '../_shared/supabase';
 import type { Env } from '../_shared/supabase';
 
 export async function onRequestGet(context: EventContext<Env, string, Record<string, unknown>>): Promise<Response> {
@@ -13,7 +13,7 @@ export async function onRequestGet(context: EventContext<Env, string, Record<str
     const topic = url.searchParams.get('topic');
     if (!topic) return errorResponse('Topic is required.', 400);
 
-    const supabase = createSupabaseClient(env, request);
+    const supabase = getAdminClient(env);
 
     const { data, error } = await supabase
       .from('topics')
@@ -55,7 +55,7 @@ export async function onRequestPatch(context: EventContext<Env, string, Record<s
 
     if (!column) return errorResponse('Invalid feature.', 400);
 
-    const supabase = createSupabaseClient(env, request);
+    const supabase = getAdminClient(env);
 
     // Upsert the topic if it doesn't exist to save state
     const { error } = await supabase
