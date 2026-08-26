@@ -9,4 +9,4 @@ destination = "dist"
 # No extra config needed — Cloudflare reads functions/*.ts automatically
 
 [build.environment]
-NODE_VERSION = "20"
+NODE_VERSION = "22"
