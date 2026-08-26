@@ -1,35 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ArrowUpRight,
-  BarChart3,
-  BookOpen,
-  Brain,
-  Check,
-  ChevronRight,
-  CircleHelp,
-  Clock3,
-  Compass,
-  Edit3,
-  Headphones,
-  Home,
-  Lightbulb,
-  LogIn,
-  LogOut,
-  Menu,
-  Mic,
-  Moon,
-  MoreHorizontal,
-  PenLine,
-  Plus,
-  RefreshCw,
-  Send,
-  Settings,
-  Sun,
-  Target,
-  TrendingUp,
-  User,
-  X,
-  Zap,
+import { 
+  Home, CircleHelp, Target, PenLine, BarChart3, ChevronRight,
+  Settings, LogOut, Send, Mic, BookOpen,
+  ArrowUpRight, Brain, Check, Clock3, Compass, Headphones, Lightbulb, LogIn, Menu, Moon, MoreHorizontal, Plus, RefreshCw, Sun, TrendingUp, User, X, Zap
 } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 import {
@@ -84,17 +57,7 @@ function getInitials(name: string) {
   return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || 'ST';
 }
 
-function formatRelativeTime(dateStr: string) {
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  if (diffDays === 0) return 'Today';
-  if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 7) return `${diffDays}d ago`;
-  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
-  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-}
+
 
 // ── Shared hooks ─────────────────────────────────────────────────────────────
 
@@ -499,7 +462,14 @@ function HomePage({ setPage, session, dashboard }: { setPage: (p: Page, ctx?: st
 function DoubtPage({ initialTopic, session }: { initialTopic?: string; session: Session }) {
   const [topic, setTopic] = useState(initialTopic || '');
   const initials = getInitials(session.user.user_metadata?.display_name || 'Student');
-  const [messages, setMessages] = useState<any[]>([
+  
+  interface Message {
+    role: 'ai' | 'user';
+    text: string;
+    time: string;
+  }
+  
+  const [messages, setMessages] = useState<Message[]>([
     { role: 'ai', text: 'Hey! What topic are you working through today? Type it above and then ask your question.', time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) },
   ]);
   const [draft, setDraft] = useState('');
@@ -529,12 +499,7 @@ function DoubtPage({ initialTopic, session }: { initialTopic?: string; session: 
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
   }, [messages, loading, topicLoading]);
 
-  const updateMessages = (newMsgs: any[]) => {
-    setMessages(newMsgs);
-    if (topic.trim()) {
-      updateTopicState(topic.trim(), 'doubt', newMsgs).catch(console.error);
-    }
-  };
+
 
   const addMessage = (role: 'ai' | 'user', text: string) => {
     const time = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -938,7 +903,7 @@ function ExplainPage({ initialTopic }: { initialTopic?: string }) {
     return () => clearTimeout(timeout);
   }, [topic]);
 
-  const syncState = (newText: string, newFeedback: any) => {
+  const syncState = (newText: string, newFeedback: ExplainBackResponse | null) => {
     if (topic.trim()) {
       updateTopicState(topic.trim(), 'explain', { text: newText, feedback: newFeedback }).catch(console.error);
     }
@@ -1209,7 +1174,7 @@ function MentorPage() {
 
 // ── Profile Page ─────────────────────────────────────────────────────────────
 
-function ProfilePage({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
+function ProfilePage({ onSignOut }: { session: Session; onSignOut: () => void }) {
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

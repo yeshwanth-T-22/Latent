@@ -2,7 +2,7 @@
 // Gemini API helpers for Cloudflare Workers runtime.
 // Uses the @google/generative-ai SDK via npm (bundled by wrangler/vite).
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
 
 function getModel(apiKey: string) {
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -14,7 +14,7 @@ function safeParseJSON<T>(text: string): T | null {
   try { return JSON.parse(cleaned) as T; } catch { return null; }
 }
 
-async function generateWithTimeout(model: any, prompt: string, timeoutMs: number = 25000) {
+async function generateWithTimeout(model: GenerativeModel, prompt: string, timeoutMs: number = 25000) {
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => reject(new Error('Generation timed out. Please try again.')), timeoutMs);
   });

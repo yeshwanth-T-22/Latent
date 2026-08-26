@@ -41,7 +41,7 @@ export async function onRequestPatch(context: EventContext<Env, string, Record<s
     const user = await getAuthUser(request, env);
     if (!user) return errorResponse('Authentication required.', 401);
 
-    const body = await request.json() as any;
+    const body = await request.json() as { topic: string; feature: string; state: unknown };
     const { topic, feature, state } = body;
 
     if (!topic || !feature || state === undefined) {

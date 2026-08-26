@@ -34,7 +34,7 @@ export async function onRequestGet(context: EventContext<Env, string, Record<str
 
     // Map recent 5 for activity feed
     const recentActivity = history.slice(0, 5).map(h => {
-      // @ts-ignore - Supabase joined data typing
+      // @ts-expect-error - Supabase joined data typing
       const topicName = h.topics?.topic_name || 'General';
       return {
         id: h.id,
@@ -58,11 +58,10 @@ export async function onRequestGet(context: EventContext<Env, string, Record<str
       const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
 
       let streak = 0;
-      let checkDate = new Date();
       
       // Check if active today or yesterday to continue current streak
       if (dates.includes(todayStr) || dates.includes(yesterdayStr)) {
-         let tempDate = dates.includes(todayStr) ? new Date() : yesterdayDate;
+         const tempDate = dates.includes(todayStr) ? new Date() : yesterdayDate;
          while (true) {
             const dateStr = tempDate.toISOString().split('T')[0];
             if (dates.includes(dateStr)) {

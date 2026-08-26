@@ -191,16 +191,16 @@ export async function updateProfile(updates: { display_name?: string; year_group
 // ── Topic State ─────────────────────────────────────────────────────────────
 
 export interface TopicState {
-  doubt_state: any | null;
-  quiz_state: any | null;
-  explain_state: any | null;
+  doubt_state: unknown | null;
+  quiz_state: unknown | null;
+  explain_state: unknown | null;
 }
 
 export async function fetchTopicState(topic: string): Promise<TopicState> {
   return apiFetch<TopicState>(`/api/topics/state?topic=${encodeURIComponent(topic)}`);
 }
 
-export async function updateTopicState(topic: string, feature: 'doubt' | 'quiz' | 'explain', state: any): Promise<{ success: boolean }> {
+export async function updateTopicState(topic: string, feature: 'doubt' | 'quiz' | 'explain', state: unknown): Promise<{ success: boolean }> {
   return apiFetch<{ success: boolean }>('/api/topics/state', {
     method: 'PATCH',
     body: JSON.stringify({ topic, feature, state }),
